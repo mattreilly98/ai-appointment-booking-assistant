@@ -1,0 +1,522 @@
+{
+  "name": "AI Appointment Booking Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0f46fa89-2676-4fb3-9ea6-f8eabb021e58",
+              "name": "current_datetime",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "bd4c5c92-d20a-4faf-b7bc-6aed9bbdab15",
+              "name": "user_timezone",
+              "value": "Europe/London",
+              "type": "string"
+            },
+            {
+              "id": "744d696d-8fde-4054-b5b3-32d566f5674b",
+              "name": "raw_message",
+              "value": "={{ $json.body.message }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -32,
+        -32
+      ],
+      "id": "1d444731-2431-4bf8-b14a-15c49055ae83",
+      "name": "Set Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "let parsed;\ntry {\n  const raw = $input.first().json.output[0].content[0].text;\n  const clean = raw.replace(/```json|```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch (e) {\n  return [{ json: { error: true, reason: 'AI output not valid JSON' } }];\n}\n\nif (parsed.intent !== 'book_appointment' || !parsed.requested_date) {\n  return [{ json: { error: true, reason: 'Could not extract a clear booking request', parsed } }];\n}\n\nconst TIME_WINDOWS = {\n  morning: '10:00',\n  afternoon: '14:00',\n  evening: '17:00',\n};\n\nconst tz = $('Set Context').first().json.user_timezone || 'Europe/London';\nconst date = parsed.requested_date;\nconst duration = parsed.duration_minutes || 30;\n\n// use the exact time if given, otherwise a default start for the period\nconst startTime = parsed.requested_time\n  || TIME_WINDOWS[parsed.requested_time_period]\n  || TIME_WINDOWS.afternoon;\n\nconst windowStart = DateTime.fromISO(`${date}T${startTime}`, { zone: tz });\nconst windowEnd = windowStart.plus({ minutes: duration })\n\nconst webhookData = $('Receive Booking Request').first().json.body;\n\nreturn [{\n  json: {\n    error: false,\n    ...parsed,\n    attendee_name: webhookData.name || parsed.attendee_name,\n    attendee_email: webhookData.email || parsed.attendee_email,\n    window_start_iso: windowStart.toISO(),\n    window_end_iso: windowEnd.toISO(),\n    duration_minutes: duration,\n    timezone: tz,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        -32
+      ],
+      "id": "fa3cd300-2594-44b7-8cb9-1f274cf0e0d2",
+      "name": "Parse & Resolve Time"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_EMAIL",
+          "mode": "list",
+          "cachedResultName": "YOUR_CALENDAR_EMAIL"
+        },
+        "timeMin": "={{ $json.window_start_iso }}",
+        "timeMax": "={{ $json.window_end_iso }}",
+        "options": {
+          "recurringEventHandling": "expand"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        784,
+        -32
+      ],
+      "id": "c331aea9-5287-429e-882f-e12d4cfb3c3c",
+      "name": "Check Availability",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "rE2XrEVe2KAdFTcw",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "06f84310-cee7-43b1-9236-19316cbd670a",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        976,
+        -32
+      ],
+      "id": "5b58cd23-0288-44d5-a04e-5133f5ff54cb",
+      "name": "Slot Free?"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_EMAIL",
+          "mode": "list",
+          "cachedResultName": "YOUR_CALENDAR_EMAIL"
+        },
+        "start": "={{ $('Parse & Resolve Time').item.json.window_start_iso }}",
+        "end": "={{ $('Parse & Resolve Time').item.json.window_end_iso }}",
+        "additionalFields": {
+          "attendees": [
+            "={{ $('Parse & Resolve Time').item.json.attendee_email }}"
+          ],
+          "description": "Booked via AI assistant",
+          "summary": "=Call with {{ $('Parse & Resolve Time').item.json.attendee_name }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        1232,
+        -208
+      ],
+      "id": "93345d1b-aba8-4c31-8e21-8ca095995bea",
+      "name": "Book Appointment",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "rE2XrEVe2KAdFTcw",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse & Resolve Time').item.json.attendee_email }}",
+        "subject": "Your appointment is confirmed",
+        "message": "=  Hi {{ $('Parse & Resolve Time').item.json.attendee_name }},    Your appointment is confirmed for {{ $('Parse & Resolve Time').item.json.window_start_iso }}.    You'll also receive a calendar invite separately.    See you then!",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        -208
+      ],
+      "id": "74549221-cbfd-4077-92ef-33c0e568cf43",
+      "name": "Send Confirmation Email",
+      "webhookId": "f5083eed-4785-4b60-a968-f9ccdad980c3",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "pkfScxbEFDGPz2OG",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $('Parse & Resolve Time').first().json;\nconst tz = data.timezone || 'Europe/London';\n\nconst start = DateTime.fromISO(data.window_start_iso, { setZone: true });\nconst duration = data.duration_minutes || 30;\n\n// offer: 1hr later same day, 2hrs later same day, same time next day\nconst alt1 = start.plus({ hours: 1 });\nconst alt2 = start.plus({ hours: 2 });\nconst alt3 = start.plus({ days: 1 });\n\nconst alternatives = [alt1, alt2, alt3].map(dt => ({\n  start_iso: dt.toISO(),\n  end_iso: dt.plus({ minutes: duration }).toISO(),\n  display: dt.toFormat(\"cccc, d LLLL 'at' h:mm a\")\n}));\n\nreturn [{\n  json: {\n    ...data,\n    alternatives,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        96
+      ],
+      "id": "83f74cab-f1c8-4702-9496-4e63898ea3c9",
+      "name": "Generate Alternatives"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.attendee_email }}",
+        "subject": "That time isn't available — here are some options",
+        "message": "=Hi {{ $json.attendee_name }},  Unfortunately that time is already booked. Here are a few alternatives:  - {{ $json.alternatives[0].display }} - {{ $json.alternatives[1].display }} - {{ $json.alternatives[2].display }}  Just reply and let me know which works best!",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        96
+      ],
+      "id": "69555a70-98a3-4425-9123-f1231ed86693",
+      "name": "Send Alternatives Email",
+      "webhookId": "2eb2ea07-02f2-4c64-b330-e8702038d525",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "pkfScxbEFDGPz2OG",
+          "name": "Gmail account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "your-webhook-path",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -208,
+        -32
+      ],
+      "id": "226a5c36-7ff5-4941-9618-4099622c0b28",
+      "name": "Receive Booking Request",
+      "webhookId": "your-webhook-path"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4.1-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "=    You are a scheduling assistant. Extract booking details from the user's message and return ONLY valid JSON, no markdown, no commentary.\n\n    Today's date and time is: {{ $json.current_datetime }} ({{ $json.user_timezone }})\n\n    Return this exact JSON shape:\n    {\n      \"intent\": \"book_appointment\" or \"unclear\",\n      \"requested_date\": \"YYYY-MM-DD\" or null,\n      \"requested_time_period\": \"morning\", \"afternoon\", \"evening\", \"specific\", or null,\n      \"requested_time\": \"HH:MM\" or null,\n      \"duration_minutes\": number,\n      \"attendee_name\": string or null,\n      \"attendee_email\": string or null\n    }\n\n    Rules:\n    - Resolve relative dates (\"next Tuesday\", \"tomorrow\") against today's date above.\n    - If no duration is mentioned, default to 30.\n    - If the message isn't a booking request, set intent to \"unclear\".\n\n\nUser's message: {{ $json.raw_message }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 0
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [
+        192,
+        -32
+      ],
+      "id": "d025cb4e-f48e-4502-94ff-d5db8e8f8cd0",
+      "name": "Extract Booking Details (AI)",
+      "credentials": {
+        "openAiApi": {
+          "id": "zfmUKBDqaZHPwST1",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"booked\",\n  \"time\": \"{{ $('Parse & Resolve Time').item.json.window_start_iso }}\"\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1632,
+        -208
+      ],
+      "id": "1409dce8-41ff-4373-b803-8ffedbba662d",
+      "name": "Respond: Booked"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"alternatives_offered\",\n  \"options\": {{ JSON.stringify($('Generate Alternatives').item.json.alternatives) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1632,
+        96
+      ],
+      "id": "83c17ab3-ede4-46de-8f69-e925534e8cb1",
+      "name": "Respond: Alternatives Offered"
+    },
+    {
+      "parameters": {
+        "content": "# AI Appointment Booking Assistant\n**Turns a plain-English booking request into a confirmed calendar event, or offers alternatives if the slot is taken.**",
+        "height": 128,
+        "width": 368,
+        "color": "#FFFFFF"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        -320
+      ],
+      "id": "a8a4fd56-9aa8-485c-a105-76ceef43c7aa",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## 1. Intake\n**Receives the request and captures today’s date and timezone for the AI.**",
+        "height": 304,
+        "width": 368,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        -160
+      ],
+      "id": "049d5863-6ded-4b4b-afc3-86f635c47b78",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## 2. Extract\n**AI turns free text into structured booking data. Code resolves fuzzy times like “afternoon” into a real window.**",
+        "height": 304,
+        "width": 560,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        144,
+        -160
+      ],
+      "id": "a15cf87b-c5af-4f42-9ad7-709efdb9e4f5",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## 3. Check\n**Checks Google Calendar for conflicts. An empty result means the slot is free, so “Always Output Data” is on.**",
+        "height": 320,
+        "width": 400,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        736,
+        -176
+      ],
+      "id": "8fdc689c-147f-4b05-a4a6-acb780278f84",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## 4a. Book\n**Free slot: create the event, confirm by email, return status: booked.**",
+        "height": 272,
+        "width": 624,
+        "color": "#0D7CA0"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        -304
+      ],
+      "id": "bd9336fd-ef33-44ef-a5ff-24951ce437e3",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## 4b. Offer Alternatives\n**Busy slot: generate three alternative times, email them, return status: alternatives_offered.**",
+        "height": 272,
+        "width": 624,
+        "color": "#0D7CA0"
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        -16
+      ],
+      "id": "8c71a0c4-10a1-48e0-a364-f04f359cb716",
+      "name": "Sticky Note5"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Set Context": {
+      "main": [
+        [
+          {
+            "node": "Extract Booking Details (AI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Resolve Time": {
+      "main": [
+        [
+          {
+            "node": "Check Availability",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Availability": {
+      "main": [
+        [
+          {
+            "node": "Slot Free?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slot Free?": {
+      "main": [
+        [
+          {
+            "node": "Book Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Alternatives",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Book Appointment": {
+      "main": [
+        [
+          {
+            "node": "Send Confirmation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Confirmation Email": {
+      "main": [
+        [
+          {
+            "node": "Respond: Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Alternatives": {
+      "main": [
+        [
+          {
+            "node": "Send Alternatives Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Alternatives Email": {
+      "main": [
+        [
+          {
+            "node": "Respond: Alternatives Offered",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Receive Booking Request": {
+      "main": [
+        [
+          {
+            "node": "Set Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Booking Details (AI)": {
+      "main": [
+        [
+          {
+            "node": "Parse & Resolve Time",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "83c17ca2-9a3a-4434-bc69-fe982c119f57",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "21610be9a4b3cba3604d42406e08217183f0bf9b2b7e460efbc4b30d7529f65b"
+  },
+  "nodeGroups": [],
+  "id": "zy5BosPkJTFbssYt",
+  "tags": []
+}
