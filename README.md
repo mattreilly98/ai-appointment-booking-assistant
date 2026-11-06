@@ -2,9 +2,9 @@
 
 An n8n workflow that turns a plain-English booking request into a confirmed Google Calendar event, or offers alternative times if the slot is already taken.
 
-**Demo video:** [add link]
+**Demo video:** [Watch the demo](https://www.loom.com/share/f9f3f36a26a947a8acefbe4ca534a2aa)
 
-![Workflow canvas](canvas.png)
+![Workflow canvas](images/canvas.png)
 
 ## What it does
 
